@@ -1,129 +1,329 @@
 'use client'
+
+import { useEffect, useState } from 'react'
+import { createClient } from '@supabase/supabase-js'
+
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState } from 'react'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-
-type QueueStat = {
-  status: string
-  count: number
+type QueueSummary = {
+  total: number
+  queued: number
+  processing: number
+  failed: number
+  completed: number
 }
 
-type Job = {
+type ProcessingJob = {
   id: string
   file_id: string
   attempt_count: number
   lease_owner: string | null
-  last_error?: string | null
+  status: string | null
 }
 
-export default function Page() {
-  const [status, setStatus] = useState('Loading...')
-  const [stats, setStats] = useState<QueueStat[]>([])
-  const [processing, setProcessing] = useState<Job[]>([])
-  const [failed, setFailed] = useState<Job[]>([])
+type FailedJob = {
+  id: string
+  file_id: string
+  attempt_count: number
+  last_error: string | null
+}
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-
-  const supabase = useMemo<SupabaseClient | null>(() => {
-    if (!supabaseUrl || !supabaseAnonKey) return null
-    return createClient(supabaseUrl, supabaseAnonKey)
-  }, [supabaseUrl, supabaseAnonKey])
+export default function HomePage() {
+  const [status, setStatus] = useState('Checking connection...')
+  const [lastCheck, setLastCheck] = useState('')
+  const [summary, setSummary] = useState<QueueSummary>({
+    total: 0,
+    queued: 0,
+    processing: 0,
+    failed: 0,
+    completed: 0,
+  })
+  const [processing, setProcessing] = useState<ProcessingJob[]>([])
+  const [failed, setFailed] = useState<FailedJob[]>([])
 
   useEffect(() => {
-    async function loadData() {
+    const runCheck = async () => {
       try {
-        if (!supabase) {
-          setStatus('❌ Missing env')
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+        if (!supabaseUrl || !supabaseAnonKey) {
+          setStatus('❌ Missing client environment variables')
+          setLastCheck(new Date().toLocaleString())
           return
         }
 
-        // Queue Stats
-        const { data: statData, error: statError } = await supabase.rpc(
-          'athrx_queue_status_counts'
-        )
+        const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-        // Fallback if RPC not created
-        if (!statData || statError) {
-          const { data } = await supabase
-            .from('athrx_queue')
-            .select('status')
+        const { count: totalCount, error: totalError } = await supabase
+          .from('athrx_queue')
+          .select('*', { count: 'exact', head: true })
 
-          const counts: Record<string, number> = {}
-          data?.forEach((row) => {
-            counts[row.status] = (counts[row.status] || 0) + 1
-          })
-
-          setStats(
-            Object.entries(counts).map(([status, count]) => ({
-              status,
-              count,
-            }))
-          )
-        } else {
-          setStats(statData)
+        if (totalError) {
+          throw totalError
         }
 
-        // Processing Jobs
-        const { data: processingData } = await supabase
+        const { count: queuedCount } = await supabase
           .from('athrx_queue')
-          .select('id,file_id,attempt_count,lease_owner')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'queued')
+
+        const { count: processingCount } = await supabase
+          .from('athrx_queue')
+          .select('*', { count: 'exact', head: true })
           .eq('status', 'processing')
-          .limit(10)
 
-        setProcessing(processingData || [])
-
-        // Failed Jobs
-        const { data: failedData } = await supabase
+        const { count: failedCount } = await supabase
           .from('athrx_queue')
-          .select('id,file_id,attempt_count,last_error')
+          .select('*', { count: 'exact', head: true })
           .eq('status', 'failed')
+
+        const { count: completedCount } = await supabase
+          .from('athrx_queue')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'completed')
+
+        const { data: processingData, error: processingError } = await supabase
+          .from('athrx_queue')
+          .select('id, file_id, attempt_count, lease_owner, status')
+          .eq('status', 'processing')
+          .order('claimed_at', { ascending: false })
           .limit(10)
 
-        setFailed(failedData || [])
+        if (processingError) {
+          throw processingError
+        }
 
-        setStatus('✅ System Live')
-      } catch (err) {
-        setStatus('❌ Error loading data')
+        const { data: failedData, error: failedError } = await supabase
+          .from('athrx_queue')
+          .select('id, file_id, attempt_count, last_error')
+          .eq('status', 'failed')
+          .order('updated_at', { ascending: false })
+          .limit(10)
+
+        if (failedError) {
+          throw failedError
+        }
+
+        setSummary({
+          total: totalCount ?? 0,
+          queued: queuedCount ?? 0,
+          processing: processingCount ?? 0,
+          failed: failedCount ?? 0,
+          completed: completedCount ?? 0,
+        })
+
+        setProcessing((processingData ?? []) as ProcessingJob[])
+        setFailed((failedData ?? []) as FailedJob[])
+
+        setStatus('✅ Connected to Supabase')
+        setLastCheck(new Date().toLocaleString())
+      } catch (error) {
+        setStatus(
+          `❌ ${
+            error instanceof Error ? error.message : 'Unknown connection error'
+          }`
+        )
+        setLastCheck(new Date().toLocaleString())
       }
     }
 
-    loadData()
-  }, [supabase])
+    runCheck()
+  }, [])
 
   return (
-    <main style={{ padding: 40, fontFamily: 'system-ui' }}>
-      <h1>ATHRX — Founder Control Center</h1>
+    <main
+      style={{
+        padding: '48px',
+        fontFamily:
+          'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        color: '#111827',
+        background: '#f8fafc',
+        minHeight: '100vh',
+      }}
+    >
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+        <h1
+          style={{
+            fontSize: '56px',
+            fontWeight: 800,
+            marginBottom: '20px',
+            letterSpacing: '-0.02em',
+          }}
+        >
+          ATHRX — Founder Control Center
+        </h1>
 
-      <p>{status}</p>
+        <div
+          style={{
+            background: '#ffffff',
+            border: '1px solid #e5e7eb',
+            borderRadius: '16px',
+            padding: '24px',
+            marginBottom: '24px',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+          }}
+        >
+          <div style={{ fontSize: '32px', fontWeight: 700, marginBottom: '12px' }}>
+            {status}
+          </div>
+          <div style={{ fontSize: '18px', color: '#6b7280' }}>
+            Last check: {lastCheck || '-'}
+          </div>
+        </div>
 
-      <h2>Queue Status</h2>
-      <ul>
-        {stats.map((s) => (
-          <li key={s.status}>
-            {s.status}: {s.count}
-          </li>
-        ))}
-      </ul>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+            gap: '16px',
+            marginBottom: '24px',
+          }}
+        >
+          <MetricCard label="Total Jobs" value={summary.total} />
+          <MetricCard label="Queued" value={summary.queued} />
+          <MetricCard label="Processing" value={summary.processing} />
+          <MetricCard label="Failed" value={summary.failed} />
+          <MetricCard label="Completed" value={summary.completed} />
+        </div>
 
-      <h2>Processing</h2>
-      <ul>
-        {processing.map((j) => (
-          <li key={j.id}>
-            {j.id} — {j.lease_owner}
-          </li>
-        ))}
-      </ul>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: '24px',
+          }}
+        >
+          <section
+            style={{
+              background: '#ffffff',
+              border: '1px solid #e5e7eb',
+              borderRadius: '16px',
+              padding: '24px',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+            }}
+          >
+            <h2 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '16px' }}>
+              Processing Jobs
+            </h2>
 
-      <h2>Failed</h2>
-      <ul>
-        {failed.map((j) => (
-          <li key={j.id}>
-            {j.id} — {j.last_error}
-          </li>
-        ))}
-      </ul>
+            {processing.length === 0 ? (
+              <EmptyState text="No processing jobs found." />
+            ) : (
+              <div style={{ display: 'grid', gap: '12px' }}>
+                {processing.map((job) => (
+                  <div
+                    key={job.id}
+                    style={{
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '12px',
+                      padding: '16px',
+                      background: '#f9fafb',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: '6px' }}>
+                      Queue ID: {job.id}
+                    </div>
+                    <div style={{ color: '#374151', marginBottom: '4px' }}>
+                      File ID: {job.file_id}
+                    </div>
+                    <div style={{ color: '#374151', marginBottom: '4px' }}>
+                      Attempt Count: {job.attempt_count}
+                    </div>
+                    <div style={{ color: '#374151', marginBottom: '4px' }}>
+                      Lease Owner: {job.lease_owner || '-'}
+                    </div>
+                    <div style={{ color: '#374151' }}>
+                      Status: {job.status || '-'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section
+            style={{
+              background: '#ffffff',
+              border: '1px solid #e5e7eb',
+              borderRadius: '16px',
+              padding: '24px',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+            }}
+          >
+            <h2 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '16px' }}>
+              Failed Jobs
+            </h2>
+
+            {failed.length === 0 ? (
+              <EmptyState text="No failed jobs found." />
+            ) : (
+              <div style={{ display: 'grid', gap: '12px' }}>
+                {failed.map((job) => (
+                  <div
+                    key={job.id}
+                    style={{
+                      border: '1px solid #fecaca',
+                      borderRadius: '12px',
+                      padding: '16px',
+                      background: '#fef2f2',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: '6px' }}>
+                      Queue ID: {job.id}
+                    </div>
+                    <div style={{ color: '#374151', marginBottom: '4px' }}>
+                      File ID: {job.file_id}
+                    </div>
+                    <div style={{ color: '#374151', marginBottom: '4px' }}>
+                      Attempt Count: {job.attempt_count}
+                    </div>
+                    <div style={{ color: '#991b1b' }}>
+                      Last Error: {job.last_error || '-'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
     </main>
+  )
+}
+
+function MetricCard({ label, value }: { label: string; value: number }) {
+  return (
+    <div
+      style={{
+        background: '#ffffff',
+        border: '1px solid #e5e7eb',
+        borderRadius: '16px',
+        padding: '20px',
+        boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+      }}
+    >
+      <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>
+        {label}
+      </div>
+      <div style={{ fontSize: '32px', fontWeight: 800 }}>{value}</div>
+    </div>
+  )
+}
+
+function EmptyState({ text }: { text: string }) {
+  return (
+    <div
+      style={{
+        border: '1px dashed #d1d5db',
+        borderRadius: '12px',
+        padding: '20px',
+        textAlign: 'center',
+        color: '#6b7280',
+        background: '#f9fafb',
+      }}
+    >
+      {text}
+    </div>
   )
 }
