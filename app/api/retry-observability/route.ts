@@ -1,19 +1,21 @@
 import { NextResponse } from "next/server";
+import { getRetryObservability } from "@/app/lib/retry-observability";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    // هنا المنطق الحقيقي (لاحقًا نربطه Supabase)
-    return NextResponse.json({
-      ok: true,
-      source: "core",
-      job: "retry-observability",
-      message: "core endpoint running"
-    });
+    const result = await getRetryObservability();
+    return NextResponse.json(result);
   } catch (error: any) {
-    return NextResponse.json({
-      ok: false,
-      error: "CORE_RETRY_OBSERVABILITY_FAILED",
-      details: error.message || "unknown_error"
-    }, { status: 500 });
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "RETRY_OBSERVABILITY_SYSTEM_ERROR",
+        details: error?.message || "unknown_error"
+      },
+      { status: 500 }
+    );
   }
 }
