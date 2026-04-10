@@ -1,89 +1,77 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
-export const dynamic = 'force-dynamic'
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export async function GET() {
-  try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const startedAt = Date.now();
 
-    if (!supabaseUrl || !serviceRoleKey) {
+  try {
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
       return NextResponse.json(
         {
           ok: false,
-          error: 'Missing server environment variables',
+          error: "MISSING_SUPABASE_ENV"
         },
         { status: 500 }
-      )
+      );
     }
 
-    const supabase = createClient(supabaseUrl, serviceRoleKey)
+    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
-    const [
-      policyResult,
-      failedReadyResult,
-      deadLetterResult,
-      retryEventsResult,
-    ] = await Promise.all([
-      supabase
-        .from('athrx_retry_policy')
-        .select('policy_key, policy_name, is_active, max_attempts, retry_schedule_seconds, updated_at')
-        .eq('policy_key', 'queue_default')
-        .maybeSingle(),
+    const { data, error } = await supabase
+      .from("athrx_queue")
+      .select("id,status,attempt_count,updated_at")
+      .order("updated_at", { ascending: false });
 
-      supabase
-        .from('athrx_queue')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'failed')
-        .not('next_retry_at', 'is', null)
-        .lte('next_retry_at', new Date().toISOString()),
-
-      supabase
-        .from('athrx_queue')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'dead_letter'),
-
-      supabase
-        .from('athrx_retry_events')
-        .select('id, queue_id, file_id, event_type, attempt_count, previous_status, new_status, scheduled_retry_at, failure_reason, created_at')
-        .order('created_at', { ascending: false })
-        .limit(20),
-    ])
-
-    if (policyResult.error) {
-      return NextResponse.json({ ok: false, error: policyResult.error.message }, { status: 500 })
+    if (error) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "RETRY_OBSERVABILITY_FETCH_FAILED",
+          details: error.message
+        },
+        { status: 500 }
+      );
     }
 
-    if (failedReadyResult.error) {
-      return NextResponse.json({ ok: false, error: failedReadyResult.error.message }, { status: 500 })
-    }
+    const rows = Array.isArray(data) ? data : [];
 
-    if (deadLetterResult.error) {
-      return NextResponse.json({ ok: false, error: deadLetterResult.error.message }, { status: 500 })
-    }
+    const summary = {
+      total: rows.length,
+      queued: rows.filter(r => r.status === "queued").length,
+      processing: rows.filter(r => r.status === "processing").length,
+      failed: rows.filter(r => r.status === "failed").length,
+      completed: rows.filter(r => r.status === "completed").length,
+      dead_letter: rows.filter(r => r.status === "dead_letter").length
+    };
 
-    if (retryEventsResult.error) {
-      return NextResponse.json({ ok: false, error: retryEventsResult.error.message }, { status: 500 })
-    }
+    const maxAttempts = Math.max(
+      0,
+      ...rows.map(r => r.attempt_count || 0)
+    );
 
     return NextResponse.json({
       ok: true,
       generated_at: new Date().toISOString(),
-      retry_policy: policyResult.data,
-      retry_engine: {
-        failed_ready_now: failedReadyResult.count ?? 0,
-        dead_letter_total: deadLetterResult.count ?? 0,
-      },
-      recent_retry_events: retryEventsResult.data ?? [],
-    })
-  } catch (error) {
+      duration_ms: Date.now() - startedAt,
+      summary,
+      max_attempts_observed: maxAttempts,
+      recent: rows.slice(0, 20)
+    });
+
+  } catch (error: any) {
     return NextResponse.json(
       {
         ok: false,
-        error: error instanceof Error ? error.message : 'Unknown server error',
+        error: "RETRY_OBSERVABILITY_SYSTEM_ERROR",
+        details: error?.message || "unknown_error"
       },
       { status: 500 }
-    )
+    );
   }
 }
