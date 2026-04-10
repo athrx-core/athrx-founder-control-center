@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getRetryObservability } from "../../../../lib/retry-observability";
+import { getRetryObservability } from "../../../lib/retry-observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
