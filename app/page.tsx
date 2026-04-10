@@ -20,15 +20,14 @@ export default function Home() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [actionLoading, setActionLoading] = useState(false)
 
   async function fetchData() {
     try {
       const res = await fetch('/api/dashboard')
       const json = await res.json()
 
-      if (!json.ok) {
-        throw new Error(json.error || 'API error')
-      }
+      if (!json.ok) throw new Error(json.error || 'API error')
 
       setData(json)
       setError(null)
@@ -39,24 +38,38 @@ export default function Home() {
     }
   }
 
+  async function retryFailed() {
+    setActionLoading(true)
+
+    try {
+      await fetch('/api/dashboard-control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'retry_failed' }),
+      })
+
+      await fetchData()
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
   useEffect(() => {
     fetchData()
-
     const interval = setInterval(fetchData, 15000)
     return () => clearInterval(interval)
   }, [])
 
-  if (loading) {
-    return <div style={{ padding: 40 }}>Loading system...</div>
-  }
+  if (loading) return <div style={{ padding: 40 }}>Loading...</div>
 
-  if (error) {
+  if (error)
     return (
       <div style={{ padding: 40, color: 'red' }}>
-        System Error: {error}
+        Error: {error}
       </div>
     )
-  }
 
   const s = data!.summary
 
@@ -74,6 +87,22 @@ export default function Home() {
         Last update: {new Date(data!.generated_at).toLocaleString()}
       </div>
 
+      {/* 🔥 CONTROL BUTTON */}
+      <button
+        onClick={retryFailed}
+        disabled={actionLoading}
+        style={{
+          padding: 12,
+          background: '#111',
+          color: '#fff',
+          borderRadius: 6,
+          marginBottom: 20,
+          cursor: 'pointer'
+        }}
+      >
+        {actionLoading ? 'Processing...' : 'Retry Failed Jobs'}
+      </button>
+
       {/* Alerts */}
       {s.failed > 0 && (
         <div style={{
@@ -87,17 +116,6 @@ export default function Home() {
         </div>
       )}
 
-      {s.processing > 0 && (
-        <div style={{
-          background: '#fff8e1',
-          padding: 12,
-          marginBottom: 20,
-          borderRadius: 8
-        }}>
-          ⚡ {s.processing} jobs currently processing
-        </div>
-      )}
-
       {/* Metrics */}
       <div style={{ display: 'flex', gap: 16 }}>
         <Card label="Total" value={s.total} />
@@ -107,14 +125,12 @@ export default function Home() {
         <Card label="Completed" value={s.completed} />
       </div>
 
-      {/* Processing */}
       <Section title="Processing Jobs">
         {data!.processing.length === 0
           ? <Empty text="No processing jobs" />
           : JSON.stringify(data!.processing)}
       </Section>
 
-      {/* Failed */}
       <Section title="Failed Jobs">
         {data!.failed.length === 0
           ? <Empty text="No failed jobs" />
@@ -124,7 +140,7 @@ export default function Home() {
   )
 }
 
-function Card({ label, value }: { label: string, value: number }) {
+function Card({ label, value }: { label: string; value: number }) {
   return (
     <div style={{
       padding: 20,
