@@ -1,68 +1,36 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { NextResponse } from "next/server";
 
-export const dynamic = 'force-dynamic'
+export async function GET(request: Request) {
+  const start = Date.now();
 
-export async function GET() {
-  return NextResponse.json({
-    ok: true,
-    message: 'retry-cycle API is working',
-  })
-}
-
-export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}))
-    const limit =
-      typeof body?.limit === 'number' && body.limit > 0 ? body.limit : 50
-    const policyKey =
-      typeof body?.policy_key === 'string' && body.policy_key.trim()
-        ? body.policy_key.trim()
-        : 'queue_default'
+    const baseUrl = new URL(request.url).origin;
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+    const res = await fetch(`${baseUrl}/api/retry-cycle`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      }
+    });
 
-    if (!supabaseUrl || !serviceRoleKey) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: 'Missing server environment variables',
-        },
-        { status: 500 }
-      )
-    }
-
-    const supabase = createClient(supabaseUrl, serviceRoleKey)
-
-    const { data, error } = await supabase.rpc('athrx_run_retry_cycle', {
-      p_policy_key: policyKey,
-      p_limit: limit,
-    })
-
-    if (error) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: error.message,
-        },
-        { status: 500 }
-      )
-    }
+    const data = await res.json();
 
     return NextResponse.json({
       ok: true,
-      action: 'retry_cycle_executed',
-      result: data ?? [],
-    })
-  } catch (error) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error:
-          error instanceof Error ? error.message : 'Unknown server error',
-      },
-      { status: 500 }
-    )
+      job: "retry-cycle",
+      ran_at: new Date().toISOString(),
+      duration_ms: Date.now() - start,
+      result: data
+    });
+
+  } catch (error: any) {
+    return NextResponse.json({
+      ok: false,
+      job: "retry-cycle",
+      ran_at: new Date().toISOString(),
+      duration_ms: Date.now() - start,
+      error: "RETRY_CYCLE_CRON_FAILED",
+      details: error.message || "unknown_error"
+    }, { status: 500 });
   }
 }
