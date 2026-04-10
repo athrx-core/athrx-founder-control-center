@@ -132,7 +132,7 @@ export async function POST() {
           shouldUpdate = true
         } else if (actionDecision === 'dead_letter' || !isRetryable) {
           targetStatus = 'dead_letter'
-          shouldUpdate = row.status !== 'dead_letter'
+          shouldUpdate = true
         }
       } else if (row.status === 'dead_letter') {
         const withinRecoveryCap =
