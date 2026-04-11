@@ -1,159 +1,91 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
 
 export const dynamic = 'force-dynamic'
 
-type QueueSummary = {
-  total: number
-  queued: number
-  processing: number
-  failed: number
-  completed: number
-}
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || ''
 
-type ProcessingJob = {
-  id: string
-  file_id: string
-  attempt_count: number
-  lease_owner: string | null
-  status: string | null
-  claimed_at?: string | null
-}
+async function safeFetch(path: string) {
+  try {
+    const res = await fetch(`${BASE_URL}${path}`, {
+      cache: 'no-store'
+    })
 
-type FailedJob = {
-  id: string
-  file_id: string
-  attempt_count: number
-  last_error: string | null
-  updated_at?: string | null
+    if (!res.ok) return null
+
+    return await res.json()
+  } catch {
+    return null
+  }
 }
 
 export async function GET() {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-    if (!supabaseUrl || !serviceRoleKey) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: 'Missing server environment variables',
-          missing: {
-            NEXT_PUBLIC_SUPABASE_URL: !supabaseUrl,
-            SUPABASE_SERVICE_ROLE_KEY: !serviceRoleKey,
-          },
-        },
-        { status: 500 }
-      )
-    }
-
-    const supabase = createClient(supabaseUrl, serviceRoleKey)
-
-    const [
-      totalResult,
-      queuedResult,
-      processingResult,
-      failedResult,
-      completedResult,
-      processingRowsResult,
-      failedRowsResult,
-    ] = await Promise.all([
-      supabase.from('athrx_queue').select('*', { count: 'exact', head: true }),
-      supabase
-        .from('athrx_queue')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'queued'),
-      supabase
-        .from('athrx_queue')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'processing'),
-      supabase
-        .from('athrx_queue')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'failed'),
-      supabase
-        .from('athrx_queue')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'completed'),
-      supabase
-        .from('athrx_queue')
-        .select('id, file_id, attempt_count, lease_owner, status, claimed_at')
-        .eq('status', 'processing')
-        .order('claimed_at', { ascending: false })
-        .limit(10),
-      supabase
-        .from('athrx_queue')
-        .select('id, file_id, attempt_count, last_error, updated_at')
-        .eq('status', 'failed')
-        .order('updated_at', { ascending: false })
-        .limit(10),
+    const [retryObs, failureObs] = await Promise.all([
+      safeFetch('/api/retry-observability'),
+      safeFetch('/api/failure-observability')
     ])
 
-    const countErrors = [
-      totalResult.error,
-      queuedResult.error,
-      processingResult.error,
-      failedResult.error,
-      completedResult.error,
-    ].filter(Boolean)
-
-    if (countErrors.length > 0) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: countErrors[0]?.message || 'Failed to load queue summary',
-        },
-        { status: 500 }
-      )
+    // ======================
+    // QUEUE SUMMARY
+    // ======================
+    const summary = retryObs?.summary || {
+      total: 0,
+      queued: 0,
+      processing: 0,
+      failed: 0,
+      completed: 0
     }
 
-    if (processingRowsResult.error) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: processingRowsResult.error.message,
-        },
-        { status: 500 }
-      )
+    const deadLetter = failureObs?.dead_letter_total || 0
+
+    // ======================
+    // RETRY
+    // ======================
+    const retry = {
+      ready_now: retryObs?.ready_now || 0,
+      max_attempts: retryObs?.max_attempts || 0,
+      schedule: retryObs?.schedule || [],
+      last_run: retryObs?.generated_at || null
     }
 
-    if (failedRowsResult.error) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: failedRowsResult.error.message,
-        },
-        { status: 500 }
-      )
+    // ======================
+    // FAILURE
+    // ======================
+    const failure = {
+      total_failed: failureObs?.total_failed || 0,
+      dead_letter: deadLetter,
+      breakdown: failureObs?.breakdown || []
     }
 
-    const summary: QueueSummary = {
-      total: totalResult.count ?? 0,
-      queued: queuedResult.count ?? 0,
-      processing: processingResult.count ?? 0,
-      failed: failedResult.count ?? 0,
-      completed: completedResult.count ?? 0,
+    // ======================
+    // SELF HEALING
+    // ======================
+    const healing = {
+      last_run: retryObs?.generated_at || null,
+      processed: retryObs?.healing_processed || 0
     }
-
-    const processing: ProcessingJob[] =
-      (processingRowsResult.data as ProcessingJob[] | null) ?? []
-
-    const failed: FailedJob[] =
-      (failedRowsResult.data as FailedJob[] | null) ?? []
 
     return NextResponse.json({
       ok: true,
       generated_at: new Date().toISOString(),
-      summary,
-      processing,
-      failed,
+
+      queue: {
+        total: summary.total,
+        queued: summary.queued,
+        processing: summary.processing,
+        completed: summary.completed,
+        dead_letter: deadLetter
+      },
+
+      retry,
+      failure,
+      healing
     })
-  } catch (error) {
+  } catch (err) {
     return NextResponse.json(
       {
         ok: false,
-        error:
-          error instanceof Error ? error.message : 'Unknown server error',
+        error: 'dashboard_aggregation_failed'
       },
       { status: 500 }
     )
