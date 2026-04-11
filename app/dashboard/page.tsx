@@ -66,18 +66,23 @@ export default function DashboardPage() {
     return () => clearInterval(interval)
   }, [])
 
-  if (loading) return <div className="p-6">Loading system...</div>
+  if (loading)
+    return <div className="p-6 text-center">Loading system...</div>
 
   if (error)
-    return <div className="p-6 text-red-500">{error}</div>
+    return <div className="p-6 text-red-500 text-center">{error}</div>
 
   if (!data) return null
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="min-h-screen bg-gray-50 p-6">
+
+      <h1 className="text-2xl font-bold mb-6">
+        ATHRX Founder Control Center
+      </h1>
 
       {/* QUEUE */}
-      <div className="grid grid-cols-5 gap-4">
+      <div className="grid grid-cols-5 gap-4 mb-6">
         <Card title="Total" value={data.queue.total} />
         <Card title="Queued" value={data.queue.queued} />
         <Card title="Processing" value={data.queue.processing} />
@@ -112,7 +117,7 @@ export default function DashboardPage() {
       </Section>
 
       {/* ACTIONS */}
-      <div className="flex gap-4">
+      <div className="flex gap-4 mt-6">
         <button
           onClick={runRetry}
           className="px-4 py-2 bg-blue-600 text-white rounded"
@@ -134,7 +139,7 @@ export default function DashboardPage() {
 
 function Card({ title, value }: { title: string; value: number }) {
   return (
-    <div className="p-4 border rounded-xl">
+    <div className="p-4 bg-white border rounded-xl shadow-sm">
       <p className="text-sm text-gray-500">{title}</p>
       <p className="text-xl font-bold">{value}</p>
     </div>
@@ -149,7 +154,7 @@ function Section({
   children: React.ReactNode
 }) {
   return (
-    <div className="p-4 border rounded-xl">
+    <div className="p-4 bg-white border rounded-xl shadow-sm mb-4">
       <h2 className="font-semibold mb-2">{title}</h2>
       {children}
     </div>
